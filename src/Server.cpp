@@ -76,8 +76,11 @@ void Server::run()
                 continue;
             }
             if (_fds[i].revents & POLLIN)
-                _readFromClient(fd);
-
+            {_readFromClient(fd);
+            if (!_clients.count(fd))  
+            {   i--;
+                continue;
+            }}
             if (_fds[i].revents & POLLOUT)
                 _flushWriteBuffer(fd);
         }
@@ -127,6 +130,7 @@ void Server::_readFromClient(int fd)
 
 void Server::_flushWriteBuffer(int fd)
 {
+    if (!_clients.count(fd)) return;
     Client* client = _clients[fd];
     const std::string& buf = client->getWriteBuffer();
 
@@ -266,8 +270,6 @@ IRCMessage Server::_parseMessage(const std::string& raw)
     return msg;
 }
  
-
-
 void Server::sendToAll(const std::string& msg)
 {
     for (std::map<int, Client*>::iterator it = _clients.begin();
@@ -326,16 +328,42 @@ void Server::_handleMessage(int fd, const std::string& raw)
 void Server::sendToClient(int fd, const std::string& msg)
 {
     if (!_clients.count(fd)) return;
- 
+
     _clients[fd]->queueMessage(msg);
- 
-    for (size_t i = 0; i < _fds.size(); i++)
+    const std::string& buf = _clients[fd]->getWriteBuffer();
+    if (!buf.empty())
     {
-        if (_fds[i].fd == fd)
+        int sent = send(fd, buf.c_str(), buf.size(), 0);
+        if (sent > 0)
+            _clients[fd]->clearWriteBuffer(sent);
+        else if (sent == -1 && errno != EWOULDBLOCK && errno != EAGAIN)
         {
-            _fds[i].events |= POLLOUT;
-            break;
+            _disconnectClient(fd);
+            return;
+        }
+    }
+    if (!_clients[fd]->getWriteBuffer().empty())
+    {
+        for (size_t i = 0; i < _fds.size(); i++)
+        {
+            if (_fds[i].fd == fd)
+            {
+                _fds[i].events |= POLLOUT;
+                break;
+            }
         }
     }
 }
 
+// temporary stubs — Person 2 and 3 replace these
+void Server::handlePASS(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
+void Server::handleNICK(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
+void Server::handleUSER(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
+void Server::handleQUIT(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
+void Server::handlePART(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
+void Server::handlePRIVMSG(int fd, IRCMessage& msg) { (void)fd; (void)msg; }
+void Server::handleJOIN(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
+void Server::handleKICK(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
+void Server::handleINVITE(int fd, IRCMessage& msg)  { (void)fd; (void)msg; }
+void Server::handleTOPIC(int fd, IRCMessage& msg)   { (void)fd; (void)msg; }
+void Server::handleMODE(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
