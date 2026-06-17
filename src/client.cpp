@@ -7,14 +7,17 @@ client::client(std::string server_ip, int server_port, std::string nickname, std
     this->nickname = nickname;
     this->username = username;
     this->pass = pass;
-    this->message = "NICK " + nickname + "\r\n" + "USER " + username + " 0 * :" + username + "\r\n" + "PASS " + pass;
+    this->recvmsg = "";
+    this->fds[0].fd = 0;
+    this->fds[0].events = POLLIN;
+    this->fds[1].fd = socketclient;
+    this->fds[1].events = POLLIN;
 }
 
 client::client(const client& other) {
     this->socketclient = other.socketclient;
     this->server_ip = other.server_ip;
     this->server_port = other.server_port;
-    this->message = other.message;
     this->nickname = other.nickname;
     this->username = other.username;
     this->pass = other.pass;
@@ -25,7 +28,6 @@ client& client::operator=(const client& other) {
         this->socketclient = other.socketclient;
         this->server_ip = other.server_ip;
         this->server_port = other.server_port;
-        this->message = other.message;
         this->nickname = other.nickname;
         this->username = other.username;
         this->pass = other.pass;
@@ -52,9 +54,83 @@ void client::connectToServer() {
 
     if (connect(socketclient, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) == -1)
         throw std::runtime_error("Failed to connect to server");
+    sendMessage("NICK " + nickname);
 }
 
-void client::sendMessage() {
-    message += "\r\n";
-    send(socketclient, message.c_str(), message.size(), 0);
+void client::registerToserver() {
+    sendMessage("PASS " + pass);
+    sendMessage("NICK " + nickname);
+    sendMessage("USER " + username + " 0 * :" + username);
+}
+
+void client::sendMessage(const std::string &message) {
+    std::string msg = message + "\r\n";
+    send(socketclient, msg.c_str(), msg.size(), 0);
+}
+
+void client::receiveMessage()
+{
+    char buffer[1024] = { 0 };
+    ssize_t bytesRead = recv(socketclient, buffer, sizeof(buffer), 0);
+    if (bytesRead == 0) {
+        throw std::runtime_error("Connection closed by server");
+    }
+    if (bytesRead < 0) {
+        throw std::runtime_error("Failed to receive message from server");
+    }
+    this->recvmsg += std::string(buffer, bytesRead);
+    size_t pos;
+    while ((pos = recvmsg.find("\r\n")) != std::string::npos)
+    {
+        std::string line = recvmsg.substr(0, pos);
+        std::cout << "Message from server: " << line << std::endl;
+        recvmsg.erase(0, pos + 2);
+        handlePing(line);
+        handleServerMessageError(line);
+    }
+
+}
+
+void client::handlePing(const std::string &message) {
+    if (message.size() > 4 && message.substr(0, 4) == "PING") {
+        sendMessage("PONG " + message.substr(5));
+    }
+}
+
+void client::handleServerMessageError(const std::string &message) {
+    if (message.find("001 " + nickname) != std::string::npos) {
+        std::cout << "Successfully registered to the server." << std::endl;
+    } else if (message.find("433 " + nickname) != std::string::npos) {
+        throw std::runtime_error("Nickname is already in use.");
+    } else if (message.find("464 " + nickname) != std::string::npos) {
+        throw std::runtime_error("Password is incorrect.");
+    } else if (message.find("ERROR") != std::string::npos) {
+        throw std::runtime_error("Error from server: " + message);
+    } else if (message.find("462 " + nickname) != std::string::npos) {
+        throw std::runtime_error("Already registered.");
+    }
+}
+
+void client::run() {
+    this->fds[0].fd = 0;
+    this->fds[0].events = POLLIN;
+    this->fds[1].fd = socketclient;
+    this->fds[1].events = POLLIN;
+    while (true) {
+        int ready = poll(fds, 2, -1);
+        if (ready == -1) {
+            throw std::runtime_error("Poll failed");
+        }
+        if (fds[0].revents & POLLIN) {
+            std::string input;
+            if (!std::getline(std::cin, input) || input == "exit") {
+                break;
+            }
+            sendMessage(input);
+        }
+        if (fds[1].revents & POLLIN) {
+            receiveMessage();
+        }
+
+    }
 }

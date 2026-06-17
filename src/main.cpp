@@ -9,7 +9,8 @@ int main(int argc, char* argv[]) {
     {
         client myClient(argv[1], std::atoi(argv[2]), argv[4], argv[5], argv[3]);
         myClient.connectToServer();
-        myClient.sendMessage();
+        myClient.registerToserver();
+        myClient.run();
     }
     catch(const std::exception& e)
     {
