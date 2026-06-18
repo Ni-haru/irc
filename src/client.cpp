@@ -32,3 +32,82 @@ void               Client::clearWriteBuffer(int sentBytes)
 {
     this->_writeBuffer.erase(0, sentBytes);
 }
+
+
+
+int         Client::getFd() const
+{
+    return this->_fd;
+}
+std::string Client::getNickname() const
+{
+    return this->_nickname;
+}
+std::string Client::getUsername() const
+{
+    return this->_username;
+}
+std::string Client::getRealname() const
+{
+    return this->_realname;
+}
+std::string Client::getHostname() const
+{
+    return this->_hostname;
+}
+
+
+bool Client::isPassAccepted() const
+{
+    if (this->_passAccepted)
+        return true;
+    return false
+}
+bool Client::isNickSet() const
+{
+    if (this->_nickSet)
+        return true;
+    return false;
+}
+bool Client::isUserSet() const
+{
+    if (this->_userSet)
+        return true;
+    return false;
+}
+bool Client::isFullyRegistered() const
+{
+    if(this->_passAccepted && this->_nickSet && this->_userSet)
+        return true;
+    return false;
+}
+
+
+void Client::setNickname(const std::string& nick)
+{
+    this->_nickname = nick;
+}
+void Client::setUsername(const std::string& user)
+{
+    this->_username = user;
+}
+void Client::setRealname(const std::string& real)
+{
+    this->_realname = real;
+}
+void Client::setHostname(const std::string& host)
+{
+    this->_hostname = host;
+}
+void Client::setPassAccepted(bool val)
+{
+    this->_passAccepted = val;
+}
+void Client::setNickSet(bool val)
+{
+    this->_nickSet = val;
+}
+void Client::setUserSet(bool val)
+{
+    this->_userSet = val;
+}
