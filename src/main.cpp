@@ -1,23 +1,38 @@
 #include "../includes/client.hpp"
+#include <iostream>
 
 int main(int argc, char* argv[]) {
-    if (argc != 6) {
-        std::cerr << "Usage: " << argv[0] << " <server_ip> <server_port> <pass> <nickname> <username>" << std::endl;
-        return 1;
-    }
-    try
+    std::string str = "PRIVMSG #chan hello\r\nPRIVMSG #chan hello\r\n";
+    std::size_t pos = str.find("\r\n");
+    if(pos != std::string::npos)
     {
-        client myClient(argv[1], std::atoi(argv[2]), argv[4], argv[5], argv[3]);
-        myClient.connectToServer();
-        myClient.registerToserver();
-        myClient.run();
+        std::cout << "\\r\\n found in " << pos << std::endl;
+        std::string str2 = str.substr(0, pos);
+        std::cout << str2 << std::endl;
+        str.erase(0, pos + 2);
+        pos = str.find("\r\n");
+        if(pos != std::string::npos)
+        {
+            std::cout << "\\r\\n found in " << pos << std::endl;
+            str2 = str.substr(0, pos);
+            std::cout << str2 << std::endl;
+            str.erase(0, pos + 2);
+            pos = str.find("\r\n");
+            if(pos != std::string::npos)
+            {
+                std::cout << "\\r\\n found in " << pos << std::endl;
+            }
+            else {
+                std::cout << "not found" << std::endl;
+            }
+        }
+        else {
+            std::cout << "not found" << std::endl;
+        }
     }
-    catch(const std::exception& e)
-    {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
+    else {
+        std::cout << "not found" << std::endl;
     }
-    
 
     return 0;
 }

@@ -1,31 +1,55 @@
-#include <iostream>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <poll.h>
+#ifndef CLIENT_HPP
+#define CLIENT_HPP
 
-class client {
-    private:
-        int socketclient;
-        std::string server_ip;
-        int server_port;
-        std::string nickname;
-        std::string username;
-        std::string pass;
-        std::string recvmsg;
-        pollfd fds[2];
-    public:
-        client(std::string server_ip, int server_port, std::string nickname, std::string username, std::string pass);
-        client (const client& other);
-        client& operator=(const client& other);
-        ~client();
+#include <string>
 
-        void connectToServer();
-        void registerToserver();
-        void sendMessage(const std::string &message);
-        void receiveMessage();
-        void handlePing(const std::string &message);
-        void handleServerMessageError(const std::string &message);
-        void run();
+class Client
+{
+private:
+    int         _fd;
+    std::string _nickname;
+    std::string _username;
+    std::string _realname;
+    std::string _hostname;
+
+    std::string _readBuffer;
+    std::string _writeBuffer;
+
+    bool        _passAccepted;
+    bool        _nickSet;
+    bool        _userSet;
+
+public:
+    Client(int fd);
+    ~Client();
+
+    void        appendToBuffer(const std::string& data);
+    bool        getNextMessage(std::string& msg);
+
+    void               queueMessage(const std::string& msg);
+    const std::string& getWriteBuffer() const;
+    void               clearWriteBuffer(int sentBytes);
+
+    int         getFd() const;
+    std::string getNickname() const;
+    std::string getUsername() const;
+    std::string getRealname() const;
+    std::string getHostname() const;
+
+    bool isPassAccepted() const;
+    bool isNickSet() const;
+    bool isUserSet() const;
+    bool isFullyRegistered() const;
+
+    void setNickname(const std::string& nick);
+    void setUsername(const std::string& user);
+    void setRealname(const std::string& real);
+    void setHostname(const std::string& host);
+    void setPassAccepted(bool val);
+    void setNickSet(bool val);
+    void setUserSet(bool val);
+
+    std::string getPrefix() const;
 };
+
+#endif
