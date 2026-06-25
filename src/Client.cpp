@@ -1,58 +1,113 @@
 #include "Client.hpp"
-#include <iostream>
 
-Client::Client(int fd)
-    : _fd(fd), _authenticated(false), _registered(false)
-{}
-
-Client::~Client()
-{
-    // fd is closed by Server — don't close here
+Client::Client(int fd){
+    this->_fd = fd;
 }
 
-// ─────────────────────────────────────────────
-// appendToBuffer
-//
-// Called every time poll() says POLLIN for this client.
-// We don't process yet — we just accumulate raw bytes.
-// TCP can deliver "HEL" in one call and "LO\r\n" in the next.
-// ─────────────────────────────────────────────
-void Client::appendToBuffer(const std::string& data)
-{
-    _readBuffer += data;
+
+void    Client::appendToBuffer(const std::string& data){
+    this->_readBuffer += data;
 }
 
-// ─────────────────────────────────────────────
-// getNextMessage
-//
-// Scans the buffer for the IRC message delimiter \r\n.
-// If found: extracts that message, removes it from the
-// buffer, stores it in 'msg', returns true.
-// If not found yet: returns false (more data needed).
-//
-// The caller loops on this until it returns false:
-//   while (client->getNextMessage(msg))
-//       handleMessage(fd, msg);
-// ─────────────────────────────────────────────
-bool Client::getNextMessage(std::string& msg)
+bool    Client::getNextMessage(std::string& msg)
 {
-    size_t pos = _readBuffer.find("\r\n");
-    if (pos == std::string::npos)
+    std::size_t pos = this->_readBuffer.find("\r\n");
+    if(pos == std::string::npos){
         return false;
-
-    msg = _readBuffer.substr(0, pos);   // message without \r\n
-    _readBuffer.erase(0, pos + 2);      // remove message + \r\n from buffer
+    }
+    msg = this->_readBuffer.substr(0, pos);
+    this->_readBuffer.erase(0, pos + 2);
     return true;
 }
 
-// ─────────────────────────────────────────────
-// queueMessage
-//
-// Person 2 calls this when they want to send something.
-// We don't send immediately — we add to _writeBuffer.
-// Server flushes it when poll() says POLLOUT.
-// ─────────────────────────────────────────────
-void Client::queueMessage(const std::string& msg)
+void               Client::queueMessage(const std::string& msg)
 {
-    _writeBuffer += msg;
+    this->_writeBuffer += msg;
+}
+const std::string& Client::getWriteBuffer() const
+{
+    return this->_writeBuffer;
+}
+void               Client::clearWriteBuffer(int sentBytes)
+{
+    this->_writeBuffer.erase(0, sentBytes);
+}
+
+
+
+int         Client::getFd() const
+{
+    return this->_fd;
+}
+std::string Client::getNickname() const
+{
+    return this->_nickname;
+}
+std::string Client::getUsername() const
+{
+    return this->_username;
+}
+std::string Client::getRealname() const
+{
+    return this->_realname;
+}
+std::string Client::getHostname() const
+{
+    return this->_hostname;
+}
+
+
+bool Client::isPassAccepted() const
+{
+    if (this->_passAccepted)
+        return true;
+    return false
+}
+bool Client::isNickSet() const
+{
+    if (this->_nickSet)
+        return true;
+    return false;
+}
+bool Client::isUserSet() const
+{
+    if (this->_userSet)
+        return true;
+    return false;
+}
+bool Client::isFullyRegistered() const
+{
+    if(this->_passAccepted && this->_nickSet && this->_userSet)
+        return true;
+    return false;
+}
+
+
+void Client::setNickname(const std::string& nick)
+{
+    this->_nickname = nick;
+}
+void Client::setUsername(const std::string& user)
+{
+    this->_username = user;
+}
+void Client::setRealname(const std::string& real)
+{
+    this->_realname = real;
+}
+void Client::setHostname(const std::string& host)
+{
+    this->_hostname = host;
+}
+void Client::setPassAccepted(bool val)
+{
+    this->_passAccepted = val;
+}
+void Client::setNickSet(bool val)
+{
+    this->_nickSet = val;
+}
+void Client::setUserSet(bool val)
+{
+    this->_userSet = val;
 }

@@ -14,7 +14,7 @@ Server::Server(int port, const std::string& password)
 
     pollfd pfd;
     pfd.fd      = _serverFd;
-    pfd.events  = POLLIN;   
+    pfd.events  = POLLIN;
     pfd.revents = 0;
     _fds.push_back(pfd);
 
@@ -244,7 +244,7 @@ IRCMessage Server::_parseMessage(const std::string& raw)
     pos = line.find(' ');
     if (pos == std::string::npos)
     {
-        msg.command = line;  
+        msg.command = line;
         return msg;
     }
     msg.command = line.substr(0, pos);
@@ -356,8 +356,103 @@ void Server::sendToClient(int fd, const std::string& msg)
 }
 
 // temporary stubs — Person 2 and 3 replace these
-void Server::handlePASS(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
-void Server::handleNICK(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
+void Server::handlePASS(int fd, IRCMessage& msg)
+{
+    Client* client = this->_clients[fd];
+    if (client->isFullyRegistered())
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_ALREADYREGISTRED, nick, msg.command + " Already Registred"));
+        return;
+    }
+    else if (msg.params.empty())
+    {
+        std::string nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NEEDMOREPARAMS, nick, msg.command + " Need Params"));
+        return;
+    }
+    else if (msg.params[0] != this->_password)
+    {
+        std::string nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_PASSWDMISMATCH, nick, msg.command +  " Password Fault"));
+        this->_disconnectClient(fd);
+        return;
+    }
+    else
+        client->setPassAccepted(true);
+}
+
+void Server::sendWelcome(Client* client)
+{
+        this->sendToClient(client->getFd(), IRC::makeReply(IRC::RPL_WELCOME, client->getNickname(), "Welcom to IRC network " + client->getNickname()+"!"+client->getUsername()+"@"+client->getHostname()));
+        this->sendToClient(client->getFd(), IRC::makeReply(IRC::RPL_YOURHOST, client->getNickname(), "Your host is ircserv running version"));
+        this->sendToClient(client->getFd(), IRC::makeReply(IRC::RPL_CREATED, client->getNickname(), "This server was created today"));
+        this->sendToClient(client->getFd(), ":ircserv 004 1.0 o channel");
+    
+}
+void Server::handleNICK(int fd, IRCMessage& msg)
+{
+    Client* client = this->_clients[fd];
+    if(!client->isPassAccepted())
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NOTREGISTERED, nick, msg.command + " Not registred"));
+        return;
+    }
+    else if (msg.params.empty() || msg.params[0].empty())
+    {
+        std::string nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NONICKNAMEGIVEN, nick, msg.command + " No NickName Given"));
+        return;
+    }
+    else
+    {
+        std::size_t pos1 = msg.params[0].find(' ');
+        std::size_t pos2 = msg.params[0].find('#');
+        std::size_t pos3 = msg.params[0].find(':');
+        if (pos1 != std::string::npos || pos2 != std::string::npos || pos3 != std::string::npos || msg.params[0].size() > 9 || msg.params[0].size() < 1)
+        {
+            std::string nick = "*";
+            sendToClient(fd, IRC::makeReply(IRC::ERR_ERRONEUSNICK, nick, msg.command + " Invalid NickName"));
+            return;
+        }
+        else
+        {
+            std::map<int, Client*>::iterator it;
+            for (it = this->_clients.begin(); it != this->_clients.end(); it++)
+            {
+                if (it->first != fd)
+                {
+                    if (it->second->getNickname() == msg.params[0])
+                    {
+                        std::string nick = "*";
+                        sendToClient(fd, IRC::makeReply(IRC::ERR_NICKNAMEINUSE, nick, msg.command + " Already Used"));
+                        return;
+                    }
+                }
+            }
+            if (client->isFullyRegistered())
+            {
+                client->setNickname(msg.params[0]);
+                client->setNickSet(true);
+            }
+            else
+            {
+                std::string oldNick = client->getNickname();
+                std::string newNick = msg.params[0];
+                client->setNickname(msg.params[0]);
+                client->setNickSet(true);
+
+            }
+            if (client->isFullyRegistered())
+                this->sendWelcome(client);
+        }
+    }
+}
 void Server::handleUSER(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
 void Server::handleQUIT(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
 void Server::handlePART(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }

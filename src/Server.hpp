@@ -6,6 +6,7 @@
 #include <map>
 #include <stdexcept>
 #include <cerrno>
+#include <cctype>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -62,6 +63,7 @@ private:
 
         // ── command handlers ──────────────────────
     // Person 2
+    void sendWelcome(Client* client);
     void handlePASS(int fd, IRCMessage& msg);
     void handleNICK(int fd, IRCMessage& msg);
     void handleUSER(int fd, IRCMessage& msg);
