@@ -38,6 +38,8 @@ namespace IRC
     const int ERR_NOSUCHNICK       = 401;
     const int ERR_NOSUCHCHANNEL    = 403;
     const int ERR_CANNOTSENDTOCHAN = 404;
+    const int ERR_NORECIPIENT      = 411;
+    const int ERR_NOTEXTTOSEND     = 412;
     const int ERR_UNKNOWNCOMMAND   = 421;
     const int ERR_NONICKNAMEGIVEN  = 431;
     const int ERR_ERRONEUSNICK     = 432;

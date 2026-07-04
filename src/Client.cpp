@@ -56,6 +56,11 @@ std::string Client::getHostname() const
     return this->_hostname;
 }
 
+std::string Client::getPrefix() const
+{
+    return this->_nickname + "!" + this->_username + "@" + this->_hostname;
+}
+
 
 bool Client::isPassAccepted() const
 {

@@ -364,19 +364,19 @@ void Server::handlePASS(int fd, IRCMessage& msg)
         std::string nick = client->getNickname();
         if (nick.empty())
             nick = "*";
-        sendToClient(fd, IRC::makeReply(IRC::ERR_ALREADYREGISTRED, nick, msg.command + " Already Registred"));
+        sendToClient(fd, IRC::makeReply(IRC::ERR_ALREADYREGISTRED, nick, "You may not reregister"));
         return;
     }
     else if (msg.params.empty())
     {
         std::string nick = "*";
-        sendToClient(fd, IRC::makeReply(IRC::ERR_NEEDMOREPARAMS, nick, msg.command + " Need Params"));
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NEEDMOREPARAMS, nick + " " + msg.command, "Not enough parameters"));
         return;
     }
     else if (msg.params[0] != this->_password)
     {
         std::string nick = "*";
-        sendToClient(fd, IRC::makeReply(IRC::ERR_PASSWDMISMATCH, nick, msg.command +  " Password Fault"));
+        sendToClient(fd, IRC::makeReply(IRC::ERR_PASSWDMISMATCH, nick, "Password incorrect"));
         this->_disconnectClient(fd);
         return;
     }
@@ -386,11 +386,10 @@ void Server::handlePASS(int fd, IRCMessage& msg)
 
 void Server::sendWelcome(Client* client)
 {
-        this->sendToClient(client->getFd(), IRC::makeReply(IRC::RPL_WELCOME, client->getNickname(), "Welcom to IRC network " + client->getNickname()+"!"+client->getUsername()+"@"+client->getHostname()));
+        this->sendToClient(client->getFd(), IRC::makeReply(IRC::RPL_WELCOME, client->getNickname(), "Welcome to the IRC Network " + client->getPrefix()));
         this->sendToClient(client->getFd(), IRC::makeReply(IRC::RPL_YOURHOST, client->getNickname(), "Your host is ircserv running version"));
         this->sendToClient(client->getFd(), IRC::makeReply(IRC::RPL_CREATED, client->getNickname(), "This server was created today"));
-        this->sendToClient(client->getFd(), ":ircserv 004 1.0 o channel");
-    
+        this->sendToClient(client->getFd(), ":ircserv 004 " +  client->getNickname() + " ircserv 1.0 o iklt\r\n");
 }
 void Server::handleNICK(int fd, IRCMessage& msg)
 {
@@ -400,24 +399,36 @@ void Server::handleNICK(int fd, IRCMessage& msg)
         std::string nick = client->getNickname();
         if (nick.empty())
             nick = "*";
-        sendToClient(fd, IRC::makeReply(IRC::ERR_NOTREGISTERED, nick, msg.command + " Not registred"));
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NOTREGISTERED, nick, "You have not registered"));
         return;
     }
     else if (msg.params.empty() || msg.params[0].empty())
     {
-        std::string nick = "*";
-        sendToClient(fd, IRC::makeReply(IRC::ERR_NONICKNAMEGIVEN, nick, msg.command + " No NickName Given"));
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NONICKNAMEGIVEN, nick, "No nickname given"));
         return;
     }
     else
     {
-        std::size_t pos1 = msg.params[0].find(' ');
-        std::size_t pos2 = msg.params[0].find('#');
-        std::size_t pos3 = msg.params[0].find(':');
-        if (pos1 != std::string::npos || pos2 != std::string::npos || pos3 != std::string::npos || msg.params[0].size() > 9 || msg.params[0].size() < 1)
+        bool invalidChar = false;
+        for (std::size_t i = 0; i < msg.params[0].size(); i++)
         {
-            std::string nick = "*";
-            sendToClient(fd, IRC::makeReply(IRC::ERR_ERRONEUSNICK, nick, msg.command + " Invalid NickName"));
+            std::string autoris = "[]{}\\|-_^";
+            if(!std::isalnum(msg.params[0][i]) && autoris.find(msg.params[0][i]) == std::string::npos)
+            {
+                invalidChar = true;
+                break;
+            }
+        }
+        
+        if (invalidChar || msg.params[0].size() > 9 || msg.params[0].size() < 1 || std::isdigit(msg.params[0][0]))
+        {
+            std::string nick = client->getNickname();
+            if (nick.empty())
+                nick = "*";
+            sendToClient(fd, IRC::makeReply(IRC::ERR_ERRONEUSNICK, nick + " " + msg.params[0], "Erroneous nickname"));
             return;
         }
         else
@@ -429,16 +440,20 @@ void Server::handleNICK(int fd, IRCMessage& msg)
                 {
                     if (it->second->getNickname() == msg.params[0])
                     {
-                        std::string nick = "*";
-                        sendToClient(fd, IRC::makeReply(IRC::ERR_NICKNAMEINUSE, nick, msg.command + " Already Used"));
+                        std::string nick = client->getNickname();
+                        if (nick.empty())
+                            nick = "*";
+                        sendToClient(fd, IRC::makeReply(IRC::ERR_NICKNAMEINUSE, nick + " " + msg.params[0], "Nickname is already in use"));
                         return;
                     }
                 }
             }
-            if (client->isFullyRegistered())
+            if (!client->isFullyRegistered())
             {
                 client->setNickname(msg.params[0]);
                 client->setNickSet(true);
+                if (client->isFullyRegistered())
+                    this->sendWelcome(client);
             }
             else
             {
@@ -446,17 +461,149 @@ void Server::handleNICK(int fd, IRCMessage& msg)
                 std::string newNick = msg.params[0];
                 client->setNickname(msg.params[0]);
                 client->setNickSet(true);
-
+                // TODO: broadcast only to shared channels
             }
-            if (client->isFullyRegistered())
-                this->sendWelcome(client);
+            
         }
     }
 }
-void Server::handleUSER(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
-void Server::handleQUIT(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
-void Server::handlePART(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
-void Server::handlePRIVMSG(int fd, IRCMessage& msg) { (void)fd; (void)msg; }
+void Server::handleUSER(int fd, IRCMessage& msg)    {
+    Client* client = this->_clients[fd];
+    if(!client->isPassAccepted())
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NOTREGISTERED, nick, "You have not registered"));
+        return;
+    }
+    else if (client->isUserSet())
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_ALREADYREGISTRED, nick, "You may not reregister"));
+        return;
+    }
+    else if (msg.params.empty() || msg.params.size() < 4)
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NEEDMOREPARAMS, nick + " " + msg.command, "Not enough parameters"));
+        return;
+    }
+    else {
+        client->setUsername(msg.params[0]);
+        client->setRealname(msg.params[3]);
+        client->setUserSet(true);
+        if(client->isFullyRegistered())
+            this->sendWelcome(client);
+    }
+}
+void Server::handleQUIT(int fd, IRCMessage& msg)    {
+    Client* client = this->_clients[fd];
+    if(client->isFullyRegistered())
+    {
+        std::string raison = "Quit:";
+        if(!msg.params.empty() && !msg.params[0].empty())
+            raison += " " + msg.params[0];
+        std::string broadcast = IRC::makeMsg(client->getPrefix(), msg.command, raison);
+        // TODO: broadcast only to shared channels
+        // TODO : retirer de channels
+        // TODO : personne 1 add quit crash
+    }
+    sendToClient(fd, "ERROR :Closing connection\r\n");
+    this->_disconnectClient(fd);
+}
+void Server::handlePART(int fd, IRCMessage& msg)    {
+    Client* client = this->_clients[fd];
+    if(!client->isFullyRegistered())
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NOTREGISTERED, nick, "You have not registered"));
+        return;
+    }
+    else if(msg.params.empty() || msg.params[0].empty())
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NEEDMOREPARAMS, nick + " " + msg.command, "Not enough parameters"));
+        return;
+    }
+    else
+    {
+        std::stringstream ss(msg.params[0]);
+        std::string channel;
+        while (std::getline(ss, channel, ','))
+        {
+            if(this->_channels.find(channel) == this->_channels.end())
+            {
+                std::string nick = client->getNickname();
+                if (nick.empty())
+                    nick = "*";
+                sendToClient(fd, IRC::makeReply(IRC::ERR_NOSUCHCHANNEL, nick + " " + channel, "No such channel"));
+            }
+            else
+            {
+                // TODO : search client in channel
+                // TODO : sent broadcast
+                // TODO : remove client from channel
+                // TODO : remove channel if vide
+            }
+        }
+        
+    }
+}
+void Server::handlePRIVMSG(int fd, IRCMessage& msg) {
+    Client* client = this->_clients[fd];
+    if(!client->isFullyRegistered())
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NOTREGISTERED, nick, "You have not registered"));
+        return;
+    }
+    else if (msg.params.empty())
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NORECIPIENT, nick, "No recipient given (" + msg.command + ")"));
+        return;
+    }
+    else if (msg.params.size() < 2)
+    {
+        std::string nick = client->getNickname();
+        if (nick.empty())
+            nick = "*";
+        sendToClient(fd, IRC::makeReply(IRC::ERR_NOTEXTTOSEND, nick, "No text to send"));
+        return;
+    }
+    else
+    {
+        std::stringstream ss(msg.params[0]);
+        std::string target;
+        while (std::getline(ss, target, ','))
+        {
+            if(target[0] == '#' || target[0] == '&')
+            {
+                // TODO : search channel
+                // TODO : search client in channel
+                // TODO : sent broadcast
+            }
+            else
+            {
+                // TODO : search client
+                // TODO : sent the msg
+            }
+        }
+    }
+}
 void Server::handleJOIN(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
 void Server::handleKICK(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
 void Server::handleINVITE(int fd, IRCMessage& msg)  { (void)fd; (void)msg; }
