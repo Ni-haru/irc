@@ -604,8 +604,450 @@ void Server::handlePRIVMSG(int fd, IRCMessage& msg) {
         }
     }
 }
-void Server::handleJOIN(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
-void Server::handleKICK(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
-void Server::handleINVITE(int fd, IRCMessage& msg)  { (void)fd; (void)msg; }
-void Server::handleTOPIC(int fd, IRCMessage& msg)   { (void)fd; (void)msg; }
-void Server::handleMODE(int fd, IRCMessage& msg)    { (void)fd; (void)msg; }
+void Server::handleJOIN(int fd, IRCMessage& msg)
+{
+    if (msg.params.empty())
+        throw std::runtime_error("ERR_NEEDMOREPARAMS");
+
+    std::string channelName = msg.params[0];
+
+    if (channelName.empty() || channelName[0] != '#')
+        throw std::runtime_error("Invalid channel name");
+
+    Channel* channel;
+
+    std::map<std::string, Channel*>::iterator it = _channels.find(channelName);
+
+    if (it == _channels.end())
+    {
+        channel = new Channel(channelName);
+        _channels[channelName] = channel;
+    }
+    else
+        channel = it->second;
+
+    Client* client = _clients[fd];
+
+    if (channel->hasClient(client))
+        return;
+
+   if (channel->isInviteOnly() && !channel->isInvited(client))
+        throw std::runtime_error("ERR_INVITEONLYCHAN");
+
+    if (channel->hasKey())
+    {
+        if (msg.params.size() < 2 || !channel->checkKey(msg.params[1]))
+            throw std::runtime_error("ERR_BADCHANNELKEY");
+    }
+
+    if (channel->hasLimit() && channel->isFull())
+        throw std::runtime_error("ERR_CHANNELISFULL");
+
+    if (channel->empty())
+        channel->addOperator(client);
+
+    channel->addClient(client);
+
+    channel->removeInvited(client);
+
+    std::string joinMsg =
+        ":" + client->getPrefix() +
+        " JOIN " +
+        channelName +
+        "\r\n";
+
+    channel->broadcast(joinMsg, NULL);
+
+    if (channel->getTopic().empty())
+    {
+        client->queueMessage(
+            ":ircserv 331 " +
+            client->getNickname() +
+            " " +
+            channelName +
+            " :No topic is set\r\n");
+    }
+    else
+    {
+        client->queueMessage(
+            ":ircserv 332 " +
+            client->getNickname() +
+            " " +
+            channelName +
+            " :" +
+            channel->getTopic() +
+            "\r\n");
+    }
+
+    const std::vector<Client*>& clients = channel->getClients();
+
+    std::string names;
+
+    for (size_t i = 0; i < clients.size(); i++)
+    {
+        Client* c = clients[i];
+
+        if (channel->isOperator(c))
+            names += "@";
+
+        names += c->getNickname();
+
+        if (i + 1 < clients.size())
+            names += " ";
+    }
+
+    client->queueMessage(
+        ":ircserv 353 " +
+        client->getNickname() +
+        " = " +
+        channelName +
+        " :" +
+        names +
+        "\r\n");
+
+    client->queueMessage(
+        ":ircserv 366 " +
+        client->getNickname() +
+        " " +
+        channelName +
+        " :End of /NAMES list\r\n");
+}
+
+void Server::handleKICK(int fd, IRCMessage& msg)
+{
+    if (msg.params.size() < 2)
+        throw std::runtime_error("ERR_NEEDMOREPARAMS");
+
+    std::string channelName = msg.params[0];
+    std::string targetNick = msg.params[1];
+
+    Client* client = _clients[fd];
+
+    std::map<std::string, Channel*>::iterator channelIt = _channels.find(channelName);
+    if (channelIt == _channels.end())
+        throw std::runtime_error("ERR_NOSUCHCHANNEL");
+
+    Channel* channel = channelIt->second;
+
+    if (!channel->hasClient(client))
+        throw std::runtime_error("ERR_NOTONCHANNEL");
+
+    if (!channel->isOperator(client))
+        throw std::runtime_error("ERR_CHANOPRIVSNEEDED");
+
+    Client* target = NULL;
+
+    for (std::map<int, Client*>::iterator clientIt = _clients.begin();
+         clientIt != _clients.end(); ++clientIt)
+    {
+        Client* member = clientIt->second;
+
+        if (member->getNickname() == targetNick)
+        {
+            target = member;
+            break;
+        }
+    }
+
+    if (target == NULL)
+        throw std::runtime_error("ERR_NOSUCHNICK");
+
+    if (!channel->hasClient(target))
+        throw std::runtime_error("ERR_USERNOTINCHANNEL");
+
+    std::string kickMsg;
+
+    if (msg.params.size() == 2)
+    {
+        kickMsg =
+            ":" + client->getPrefix() +
+            " KICK " +
+            channelName +
+            " " +
+            targetNick +
+            "\r\n";
+    }
+    else
+    {
+        kickMsg =
+            ":" + client->getPrefix() +
+            " KICK " +
+            channelName +
+            " " +
+            targetNick +
+            " :" +
+            msg.params[2] +
+            "\r\n";
+    }
+
+    sendToClient(client->getFd(), kickMsg);
+
+    channel->broadcast(kickMsg, client);
+
+    channel->removeClient(target);
+
+    channel->removeOperator(target);
+
+    if (channel->empty())
+    {
+        delete channel;
+        _channels.erase(channelIt);
+    }
+}
+
+void Server::handleINVITE(int fd, IRCMessage& msg)
+{
+    if (msg.params.size() != 2)
+        throw std::runtime_error("ERR_NEEDMOREPARAMS");
+
+    std::string targetNick = msg.params[0];
+    std::string channelName = msg.params[1];
+
+    Client* client = _clients[fd];
+
+    std::map<std::string, Channel*>::iterator channelIt = _channels.find(channelName);
+    if (channelIt == _channels.end())
+        throw std::runtime_error("ERR_NOSUCHCHANNEL");
+
+    Channel* channel = channelIt->second;
+
+    if (!channel->hasClient(client))
+        throw std::runtime_error("ERR_NOTONCHANNEL");
+
+    if (channel->isInviteOnly() && !channel->isOperator(client))
+        throw std::runtime_error("ERR_CHANOPRIVSNEEDED");
+
+    Client* target = NULL;
+
+    for (std::map<int, Client*>::iterator clientIt = _clients.begin();
+         clientIt != _clients.end(); ++clientIt)
+    {
+        Client* member = clientIt->second;
+
+        if (member->getNickname() == targetNick)
+        {
+            target = member;
+            break;
+        }
+    }
+
+    if (target == NULL)
+        throw std::runtime_error("ERR_NOSUCHNICK");
+
+    if (channel->hasClient(target))
+        throw std::runtime_error("ERR_USERONCHANNEL");
+
+    if (!channel->isInvited(target))
+        channel->addInvited(target);
+
+    std::string inviteMsg =
+        ":" + client->getPrefix() +
+        " INVITE " +
+        targetNick +
+        " " +
+        channelName +
+        "\r\n";
+
+    std::string reply =
+        ":server 341 " +
+        client->getNickname() +
+        " " +
+        targetNick +
+        " " +
+        channelName +
+        "\r\n";
+
+    sendToClient(target->getFd(), inviteMsg);
+    sendToClient(client->getFd(), reply);
+}
+void Server::handleMODE(int fd, IRCMessage& msg)
+{
+    if (msg.params.size() < 2)
+        throw std::runtime_error("ERR_NEEDMOREPARAMS");
+
+    std::string channelName = msg.params[0];
+    std::string modes = msg.params[1];
+
+    std::map<std::string, Channel*>::iterator it = _channels.find(channelName);
+    if (it == _channels.end())
+        throw std::runtime_error("ERR_NOSUCHCHANNEL");
+
+    Channel* channel = it->second;
+    Client* client = _clients[fd];
+
+    if (!channel->hasClient(client))
+        throw std::runtime_error("ERR_NOTONCHANNEL");
+
+    if (!channel->isOperator(client))
+        throw std::runtime_error("ERR_CHANOPRIVSNEEDED");
+
+    char sign = '+';
+    int argIndex = 2;
+
+    for (size_t i = 0; i < modes.size(); i++)
+    {
+        char c = modes[i];
+
+        if (c == '+' || c == '-')
+        {
+            sign = c;
+            continue;
+        }
+
+        if (c == 'i')
+        {
+            channel->setInviteOnly(sign == '+');
+        }
+        else if (c == 't')
+        {
+            channel->setTopicRestricted(sign == '+');
+        }
+        else if (c == 'k')
+        {
+            if (sign == '+')
+            {
+                if (argIndex >= (int)msg.params.size())
+                    throw std::runtime_error("ERR_NEEDMOREPARAMS");
+
+                channel->setKey(msg.params[argIndex++]);
+            }
+            else
+            {
+                channel->setKey("");
+            }
+        }
+        else if (c == 'l')
+        {
+            if (sign == '+')
+            {
+                if (argIndex >= (int)msg.params.size())
+                    throw std::runtime_error("ERR_NEEDMOREPARAMS");
+
+                int limit = std::atoi(msg.params[argIndex++].c_str());
+
+                if (limit <= 0)
+                    throw std::runtime_error("ERR_INVALIDMODEPARAM");
+
+                channel->setUserLimit(limit);
+            }
+            else
+            {
+                channel->setUserLimit(-1);
+            }
+        }
+        else if (c == 'o')
+        {
+            if (argIndex >= (int)msg.params.size())
+                throw std::runtime_error("ERR_NEEDMOREPARAMS");
+
+            std::string targetNick = msg.params[argIndex++];
+
+            Client* target = NULL;
+
+            for (std::map<int, Client*>::iterator itc = _clients.begin();
+                 itc != _clients.end(); ++itc)
+            {
+                if (itc->second->getNickname() == targetNick)
+                {
+                    target = itc->second;
+                    break;
+                }
+            }
+
+            if (target == NULL)
+                throw std::runtime_error("ERR_NOSUCHNICK");
+
+            if (!channel->hasClient(target))
+                throw std::runtime_error("ERR_USERNOTINCHANNEL");
+
+            if (sign == '+')
+                channel->addOperator(target);
+            else
+                channel->removeOperator(target);
+        }
+    }
+
+    std::string modeMsg =
+        ":" + client->getPrefix() +
+        " MODE " +
+        channelName +
+        " " +
+        modes;
+
+    for (size_t i = 2; i < msg.params.size(); i++)
+        modeMsg += " " + msg.params[i];
+
+    modeMsg += "\r\n";
+
+    channel->broadcast(modeMsg, NULL);
+}
+
+void Server::handleTOPIC(int fd, IRCMessage& msg)
+{
+    if (msg.params.empty())
+        throw std::runtime_error("ERR_NEEDMOREPARAMS");
+
+    std::string channelName = msg.params[0];
+    std::string newTopic = msg.params[1];
+
+
+    std::map<std::string, Channel*>::iterator it = _channels.find(channelName);
+    if (it == _channels.end())
+        throw std::runtime_error("ERR_NOSUCHCHANNEL");
+
+    Channel* channel = it->second;
+    Client* client = _clients[fd];
+
+    if (!channel->hasClient(client))
+        throw std::runtime_error("ERR_NOTONCHANNEL");
+
+
+    if (msg.params.size() == 1)
+    {
+        if (channel->getTopic().empty())
+        {
+            std::string msg331 =
+                ":ircserv 331 " + client->getNickname() +
+                " " + channelName +
+                " :No topic is set\r\n";
+
+            client->queueMessage(msg331);
+        }
+        else
+        {
+            std::string msg332 =
+                ":ircserv 332 " + client->getNickname() +
+                " " + channelName +
+                " :" + channel->getTopic() + "\r\n";
+
+            client->queueMessage(msg332);
+        }
+        return;
+    }
+
+    if (channel->isTopicRestricted() && !channel->isOperator(client))
+    {
+        std::string err =
+            ":ircserv 482 " + client->getNickname() +
+            " " + channelName +
+            " :You're not channel operator\r\n";
+
+        client->queueMessage(err);
+        return;
+    }
+
+    std::string newTopic = msg.params[1];
+
+    if (!newTopic.empty() && newTopic[0] == ':')
+        newTopic.erase(0, 1);
+
+    channel->setTopic(newTopic);
+
+    std::string topicMsg =
+        ":" + client->getNickname() +
+        "!" + client->getUsername() +
+        " TOPIC " + channelName +
+        " :" + newTopic + "\r\n";
+
+    channel->broadcast(topicMsg, NULL);
+}
