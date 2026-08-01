@@ -19,7 +19,7 @@ class Channel
         bool _inviteOnly;
         bool _topicRestricted;
         std::string _key;
-        int _userLimit;  
+        int _userLimit;
 
     public:
         Channel(const std::string& name);
@@ -53,8 +53,9 @@ class Channel
         int  getUserLimit() const;
         void setUserLimit(int limit);
         bool isFull() const;
+        bool hasLimit() const;
 
-        const std::string& getName() const; 
+        const std::string& getName() const;
 };
 
 
