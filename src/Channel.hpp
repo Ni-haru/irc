@@ -4,8 +4,7 @@
 #include <string>
 #include <vector>
 #include <sys/socket.h>
-
-class Client;
+#include "Client.hpp"
 
 class Channel
 {

@@ -1,8 +1,13 @@
 
 #include "Client.hpp"
 
-Client::Client(int fd){
-    this->_fd = fd;
+Client::Client(int fd)
+    : _fd(fd), _passAccepted(false), _nickSet(false), _userSet(false)
+{
+}
+
+Client::~Client()
+{
 }
 
 
@@ -67,7 +72,7 @@ bool Client::isPassAccepted() const
 {
     if (this->_passAccepted)
         return true;
-    return false
+    return false;
 }
 bool Client::isNickSet() const
 {

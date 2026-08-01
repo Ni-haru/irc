@@ -1,5 +1,7 @@
 #include "Server.hpp"
 
+#include <cstdlib>
+
 bool Server::_stop = false;
 
 
@@ -604,6 +606,7 @@ void Server::handlePRIVMSG(int fd, IRCMessage& msg) {
         }
     }
 }
+
 void Server::handleJOIN(int fd, IRCMessage& msg)
 {
     if (msg.params.empty())
@@ -1036,7 +1039,6 @@ void Server::handleTOPIC(int fd, IRCMessage& msg)
         return;
     }
 
-    std::string newTopic = msg.params[1];
 
     if (!newTopic.empty() && newTopic[0] == ':')
         newTopic.erase(0, 1);
