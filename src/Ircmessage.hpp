@@ -28,11 +28,11 @@ namespace IRC
     const int RPL_YOURHOST      = 2;
     const int RPL_CREATED       = 3;
     const int RPL_MYINFO        = 4;
-    const int RPL_NAMREPLY      = 353;
-    const int RPL_ENDOFNAMES    = 366;
     const int RPL_NOTOPIC       = 331;
     const int RPL_TOPIC         = 332;
     const int RPL_INVITING      = 341;
+    const int RPL_NAMREPLY      = 353;
+    const int RPL_ENDOFNAMES    = 366;
 
     // errors
     const int ERR_NOSUCHNICK       = 401;
@@ -44,6 +44,7 @@ namespace IRC
     const int ERR_NONICKNAMEGIVEN  = 431;
     const int ERR_ERRONEUSNICK     = 432;
     const int ERR_NICKNAMEINUSE    = 433;
+    const int ERR_USERNOTINCHANNEL = 441; // <-- ADDED THIS LINE
     const int ERR_NOTONCHANNEL     = 442;
     const int ERR_USERONCHANNEL    = 443;
     const int ERR_NOTREGISTERED    = 451;
