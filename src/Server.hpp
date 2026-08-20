@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <cerrno>
 #include <cctype>
@@ -41,6 +42,7 @@ private:
     std::vector<pollfd>         _fds;       // [0] = server, [1..n] = clients
     std::map<int, Client*>      _clients;   // fd → Client*
     std::map<std::string, Channel*> _channels; // "#name" → Channel*
+    std::set<int>               _closing;   // fds to close once their buffer is flushed
 
    
     void _createSocket();
@@ -55,6 +57,8 @@ private:
     void _readFromClient(int fd);
     void _flushWriteBuffer(int fd);
     void _disconnectClient(int fd);
+    void _queueDisconnect(int fd);
+    void _reapClosing();
     void sendToClient(int fd, const std::string& msg);
     void sendToAll(const std::string& msg);
 

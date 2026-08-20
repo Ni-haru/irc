@@ -1,4 +1,3 @@
-
 #include "Client.hpp"
 
 Client::Client(int fd)
@@ -17,12 +16,24 @@ void    Client::appendToBuffer(const std::string& data){
 
 bool    Client::getNextMessage(std::string& msg)
 {
-    std::size_t pos = this->_readBuffer.find("\r\n");
-    if(pos == std::string::npos){
+    // IRC says lines end with CRLF, but plain `nc` (without -C) sends a bare LF.
+    // We split on '\n' and drop an optional preceding '\r', so both work.
+    std::size_t pos = this->_readBuffer.find('\n');
+    if (pos == std::string::npos)
+    {
+        // Guard against a client that never sends a terminator: the spec caps a
+        // message at 512 bytes, so anything far beyond that is garbage.
+        if (this->_readBuffer.size() > 8192)
+            this->_readBuffer.clear();
         return false;
     }
-    msg = this->_readBuffer.substr(0, pos);
-    this->_readBuffer.erase(0, pos + 2);
+
+    std::size_t end = pos;
+    if (end > 0 && this->_readBuffer[end - 1] == '\r')
+        end--;
+
+    msg = this->_readBuffer.substr(0, end);
+    this->_readBuffer.erase(0, pos + 1);
     return true;
 }
 

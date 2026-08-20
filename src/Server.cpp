@@ -96,6 +96,8 @@ void Server::run()
             }
         }
 
+        _reapClosing();
+
         // Arm/disarm POLLOUT dynamically for each client at end of loop
         for (size_t i = 1; i < _fds.size(); i++)
         {
@@ -150,7 +152,7 @@ void Server::_readFromClient(int fd)
     it->second->appendToBuffer(std::string(buf, bytes));
 
     std::string msg;
-    while (_clients.count(fd) && _clients[fd]->getNextMessage(msg))
+    while (_clients.count(fd) && !_closing.count(fd) && _clients[fd]->getNextMessage(msg))
         _handleMessage(fd, msg);
 }
 
@@ -165,13 +167,50 @@ void Server::_flushWriteBuffer(int fd)
 
     int sent = send(fd, buf.c_str(), buf.size(), 0);
     if (sent > 0)
+    {
         client->clearWriteBuffer(sent);
-    else if (sent <= 0)
+        if (client->getWriteBuffer().empty() && _closing.count(fd))
+            _disconnectClient(fd);
+    }
+    else
         _disconnectClient(fd);
+}
+
+// Ask for a disconnect that must NOT lose the bytes still queued for the client.
+// If nothing is pending we close right away; otherwise we remember the fd and
+// close it in _reapClosing() once _flushWriteBuffer() has drained the buffer.
+void Server::_queueDisconnect(int fd)
+{
+    if (!_clients.count(fd))
+        return;
+    if (_clients[fd]->getWriteBuffer().empty())
+    {
+        _disconnectClient(fd);
+        return;
+    }
+    _closing.insert(fd);
+}
+
+// Called once per poll() iteration: closes every client that was marked for
+// disconnection and has since finished writing.
+void Server::_reapClosing()
+{
+    std::set<int>::iterator it = _closing.begin();
+    while (it != _closing.end())
+    {
+        int fd = *it;
+        ++it;
+        if (!_clients.count(fd))
+            _closing.erase(fd);
+        else if (_clients[fd]->getWriteBuffer().empty())
+            _disconnectClient(fd);
+    }
 }
 
 void Server::_disconnectClient(int fd)
 {
+    _closing.erase(fd);
+
     std::map<int, Client*>::iterator cit = _clients.find(fd);
     if (cit != _clients.end())
     {
@@ -376,7 +415,7 @@ void Server::handlePASS(int fd, IRCMessage& msg)
     else if (msg.params[0] != this->_password)
     {
         sendToClient(fd, IRC::makeReply(IRC::ERR_PASSWDMISMATCH, "*", "Password incorrect"));
-        this->_disconnectClient(fd);
+        this->_queueDisconnect(fd);
         return;
     }
     else
@@ -503,7 +542,7 @@ void Server::handleQUIT(int fd, IRCMessage& msg)
         }
     }
     sendToClient(fd, "ERROR :Closing connection\r\n");
-    this->_disconnectClient(fd);
+    this->_queueDisconnect(fd);
 }
 
 void Server::handlePART(int fd, IRCMessage& msg)
