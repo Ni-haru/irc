@@ -3,11 +3,7 @@
 Client::Client(int fd)
     : _fd(fd), _hostname("127.0.0.1"),
       _passAccepted(false), _nickSet(false), _userSet(false)
-{
-    // _hostname is overwritten by Server::_acceptClient() with the real peer
-    // address; the default is only a safety net so that getPrefix() can never
-    // produce "nick!user@" with an empty host, which some clients reject.
-}
+{}
 
 Client::~Client()
 {
@@ -20,13 +16,9 @@ void    Client::appendToBuffer(const std::string& data){
 
 bool    Client::getNextMessage(std::string& msg)
 {
-    // IRC says lines end with CRLF, but plain `nc` (without -C) sends a bare LF.
-    // We split on '\n' and drop an optional preceding '\r', so both work.
     std::size_t pos = this->_readBuffer.find('\n');
     if (pos == std::string::npos)
     {
-        // Guard against a client that never sends a terminator: the spec caps a
-        // message at 512 bytes, so anything far beyond that is garbage.
         if (this->_readBuffer.size() > 8192)
             this->_readBuffer.clear();
         return false;

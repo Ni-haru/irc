@@ -5,9 +5,6 @@
 
 bool Server::_stop = false;
 
-// ═════════════════════════════════════════════════════════════════════
-//  Construction / destruction
-// ═════════════════════════════════════════════════════════════════════
 
 Server::Server(int port, const std::string& password)
     : _port(port), _password(password), _serverFd(-1)
@@ -26,10 +23,6 @@ Server::Server(int port, const std::string& password)
 
     signal(SIGINT,  Server::_signalHandler);
     signal(SIGTERM, Server::_signalHandler);
-    // A client can vanish between our poll() and our send(). Writing to a
-    // socket whose peer is gone raises SIGPIPE, whose default action kills
-    // the process — which the subject counts as a crash. Ignoring it makes
-    // send() return -1 instead, which we already handle.
     signal(SIGPIPE, SIG_IGN);
 
     std::cout << "Server listening on port " << _port << std::endl;
@@ -62,23 +55,14 @@ void Server::_signalHandler(int sig)
     Server::_stop = true;
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  The event loop — the one and only poll() in the project
-// ═════════════════════════════════════════════════════════════════════
-
 void Server::run()
 {
     while (!Server::_stop)
     {
-        // &_fds[0] rather than _fds.data(): data() is C++11. _fds always
-        // holds at least the listening socket, so indexing 0 is safe.
         int ready = poll(&_fds[0], _fds.size(), -1);
 
         if (ready == -1)
         {
-            // poll() returning -1 here is either our own SIGINT interrupting
-            // it, or a real failure. We do not inspect errno to retry an I/O
-            // operation — the subject forbids that.
             if (Server::_stop)
                 break;
             std::cerr << "poll() error" << std::endl;
@@ -95,7 +79,7 @@ void Server::run()
             if (_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL))
             {
                 _disconnectClient(fd);
-                i--;                    // element i was erased, re-check it
+                i--;                
                 continue;
             }
             if (_fds[i].revents & POLLIN)
@@ -117,12 +101,7 @@ void Server::run()
                 }
             }
         }
-
         _reapClosing();
-
-        // Arm/disarm POLLOUT once per iteration. We never call send() unless
-        // poll() has just told us the socket is writable, so everything the
-        // handlers produced during this iteration goes out on the next one.
         for (size_t i = 1; i < _fds.size(); i++)
         {
             std::map<int, Client*>::iterator it = _clients.find(_fds[i].fd);
@@ -145,8 +124,6 @@ void Server::_acceptClient()
     int clientFd = accept(_serverFd, (struct sockaddr*)&clientAddr, &addrLen);
     if (clientFd == -1)
     {
-        // No errno-driven retry: poll() said the listening socket was ready,
-        // and if accept() still failed we simply skip this iteration.
         std::cerr << "accept() failed" << std::endl;
         return;
     }
@@ -159,9 +136,6 @@ void Server::_acceptClient()
     _fds.push_back(pfd);
 
     Client* client = new Client(clientFd);
-    // The host part of a client's prefix (nick!user@host) must never be
-    // empty: clients parse the prefix to know who sent a message, and an
-    // empty host makes "alice!bob@" which several clients reject outright.
     client->setHostname(inet_ntoa(clientAddr.sin_addr));
     _clients[clientFd] = client;
 
@@ -170,17 +144,11 @@ void Server::_acceptClient()
 
 void Server::_readFromClient(int fd)
 {
-    // One recv() per POLLIN, never a loop: the subject requires poll() before
-    // every read. 4096 instead of 512 only changes how much of an already
-    // available burst we drain per iteration — it keeps a flooding client
-    // from starving the other connections for many loop turns.
     char    buf[4096];
     ssize_t bytes = recv(fd, buf, sizeof(buf), 0);
 
     if (bytes <= 0)
     {
-        // 0 = orderly shutdown, -1 = error. Either way the connection is
-        // over; we do not look at errno to decide to read again.
         _disconnectClient(fd);
         return;
     }
@@ -189,10 +157,6 @@ void Server::_readFromClient(int fd)
     if (it == _clients.end())
         return;
     it->second->appendToBuffer(std::string(buf, bytes));
-
-    // TCP is a byte stream, so one recv() may carry half a command, one
-    // command, or five. We only execute the complete lines sitting in the
-    // buffer and leave any partial tail there for the next POLLIN.
     std::string msg;
     while (_clients.count(fd) && !_closing.count(fd)
            && _clients[fd]->getNextMessage(msg))
@@ -212,25 +176,15 @@ void Server::_flushWriteBuffer(int fd)
     ssize_t sent = send(fd, buf.c_str(), buf.size(), 0);
     if (sent > 0)
     {
-        // A partial write is normal: the kernel accepted what fitted in the
-        // socket buffer. We drop exactly that many bytes and the rest waits
-        // for the next POLLOUT.
         client->clearWriteBuffer(static_cast<int>(sent));
         if (client->getWriteBuffer().empty() && _closing.count(fd))
             _disconnectClient(fd);
     }
     else
-    {
-        // poll() had just reported the socket writable, so a failure here is
-        // a dead peer, not a would-block situation.
         _disconnectClient(fd);
-    }
+    
 }
 
-// Ask for a disconnect that must NOT lose the bytes still queued for the
-// client (the 464 password error, the ERROR line after QUIT...). If nothing
-// is pending we close right away; otherwise we remember the fd and close it
-// in _reapClosing() once _flushWriteBuffer() has drained the buffer.
 void Server::_queueDisconnect(int fd)
 {
     if (!_clients.count(fd))
@@ -265,10 +219,6 @@ void Server::_disconnectClient(int fd)
     if (cit != _clients.end())
     {
         Client* client = cit->second;
-
-        // Tell the channels the user was in, before the object dies. Every
-        // Channel holds raw Client* — if we deleted the Client first, those
-        // pointers would dangle and the next broadcast would segfault.
         std::string quitMsg;
         if (client->isFullyRegistered())
             quitMsg = ":" + client->getPrefix() + " QUIT :Connection closed\r\n";
@@ -289,8 +239,8 @@ void Server::_disconnectClient(int fd)
             if (channel->empty())
             {
                 delete channel;
-                _channels.erase(ch++);   // post-increment: the iterator is
-            }                            // advanced before erase invalidates it
+                _channels.erase(ch++);  
+            }                           
             else
                 ++ch;
         }
@@ -311,9 +261,6 @@ void Server::_disconnectClient(int fd)
     std::cout << "Client disconnected: fd=" << fd << std::endl;
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  Socket setup
-// ═════════════════════════════════════════════════════════════════════
 
 void Server::_createSocket()
 {
@@ -334,7 +281,6 @@ void Server::_setSocketOptions()
 
 void Server::_setNonBlocking(int fd)
 {
-    // The only form of fcntl() the subject allows.
     if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1)
     {
         close(fd);
@@ -348,8 +294,7 @@ void Server::_bindSocket()
     std::memset(&addr, 0, sizeof(addr));
     addr.sin_family      = AF_INET;
     addr.sin_port        = htons(_port);
-    addr.sin_addr.s_addr = INADDR_ANY;   // listen on every interface
-
+    addr.sin_addr.s_addr = INADDR_ANY;  
     if (bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) == -1)
     {
         close(_serverFd);
@@ -366,9 +311,6 @@ void Server::_listenSocket()
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  Parsing and small helpers
-// ═════════════════════════════════════════════════════════════════════
 
 IRCMessage Server::_parseMessage(const std::string& raw)
 {
@@ -384,8 +326,6 @@ IRCMessage Server::_parseMessage(const std::string& raw)
         msg.prefix = line.substr(1, pos - 1);
         line = line.substr(pos + 1);
     }
-
-    // A client may send extra spaces; skip them so " PING" still parses.
     while (!line.empty() && line[0] == ' ')
         line.erase(0, 1);
 
@@ -407,8 +347,6 @@ IRCMessage Server::_parseMessage(const std::string& raw)
         }
         if (line[0] == ':')
         {
-            // The trailing parameter: everything after the colon is one
-            // single argument, spaces included.
             msg.params.push_back(line.substr(1));
             break;
         }
@@ -502,7 +440,7 @@ std::string Server::_modeString(Channel* channel, bool withKeyAndLimit)
     {
         modes += "k";
         if (withKeyAndLimit)
-            args += " *";               // never leak the key in a reply
+            args += " *";              
     }
     if (channel->hasLimit())
     {
@@ -538,13 +476,6 @@ void Server::_sendNames(int fd, Channel* channel)
         client->getNickname() + " " + channel->getName(), "End of /NAMES list"));
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  Output
-// ═════════════════════════════════════════════════════════════════════
-
-// This only *queues*. The actual send() happens in _flushWriteBuffer(),
-// which runs only after poll() reported POLLOUT. That separation is what
-// keeps the project inside the "one poll(), no send without poll()" rule.
 void Server::sendToClient(int fd, const std::string& msg)
 {
     if (!_clients.count(fd))
@@ -559,10 +490,6 @@ void Server::sendToAll(const std::string& msg)
         sendToClient(it->first, msg);
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  Dispatch
-// ═════════════════════════════════════════════════════════════════════
-
 void Server::_handleMessage(int fd, const std::string& raw)
 {
     if (raw.empty())
@@ -571,8 +498,6 @@ void Server::_handleMessage(int fd, const std::string& raw)
     IRCMessage msg = _parseMessage(raw);
     if (msg.command.empty())
         return;
-
-    // IRC command verbs are case-insensitive.
     std::string cmd = IRC::toUpper(msg.command);
     msg.command = cmd;
 
@@ -580,16 +505,8 @@ void Server::_handleMessage(int fd, const std::string& raw)
         return;
     Client* client = _clients[fd];
 
-    // NOTE: there is deliberately no per-command logging here.
-    // std::cout is a blocking file descriptor and we never poll() it. If the
-    // process is launched with its stdout on a pipe that nobody drains (a
-    // test harness, `./ircserv 6667 pw | tee log`, ...), the 64 KB pipe
-    // buffer fills after a few thousand lines and the next write() blocks
-    // the whole server inside the event loop — no poll(), no reads, no
-    // accepts. A flood of messages is exactly what fills it.
     try
     {
-        // ── allowed before registration completes ──
         if      (cmd == "CAP")  { handleCAP(fd, msg);  return; }
         else if (cmd == "PASS") { handlePASS(fd, msg); return; }
         else if (cmd == "NICK") { handleNICK(fd, msg); return; }
@@ -598,11 +515,8 @@ void Server::_handleMessage(int fd, const std::string& raw)
         else if (cmd == "PING") { handlePING(fd, msg); return; }
         else if (cmd == "PONG") { handlePONG(fd, msg); return; }
 
-        // ── everything below needs a registered user ──
         if (!client->isFullyRegistered())
         {
-            // RFC: a NOTICE must never trigger an automatic reply,
-            // otherwise two servers could ping-pong error messages forever.
             if (cmd != "NOTICE")
             {
                 std::string nick = client->getNickname().empty()
@@ -633,15 +547,11 @@ void Server::_handleMessage(int fd, const std::string& raw)
     }
     catch (const std::exception& e)
     {
-        // A throw inside a handler must never take the whole server down.
         std::cerr << "Error handling message on fd " << fd
                   << ": " << e.what() << std::endl;
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  Registration: PASS / NICK / USER
-// ═════════════════════════════════════════════════════════════════════
 
 void Server::handlePASS(int fd, IRCMessage& msg)
 {
@@ -664,8 +574,6 @@ void Server::handlePASS(int fd, IRCMessage& msg)
         sendToClient(fd, IRC::makeReply(IRC::ERR_PASSWDMISMATCH,
             "*", "Password incorrect"));
         sendToClient(fd, "ERROR :Closing link (Bad password)\r\n");
-        // Queue, don't close: the two lines above still have to reach the
-        // client, and they are only written on the next POLLOUT.
         _queueDisconnect(fd);
         return;
     }
@@ -730,9 +638,6 @@ void Server::handleNICK(int fd, IRCMessage& msg)
             current + " " + newNick, "Erroneous nickname"));
         return;
     }
-
-    // Collision test uses the RFC casemapping: "Bob" and "bob" are the same
-    // nickname, so the second one must be refused.
     Client* holder = _findClientByNick(newNick);
     if (holder && holder != client)
     {
@@ -740,11 +645,6 @@ void Server::handleNICK(int fd, IRCMessage& msg)
             current + " " + newNick, "Nickname is already in use"));
         return;
     }
-
-    // Whether this NICK completes the registration or renames an already
-    // registered user has to be decided BEFORE we store the new nickname —
-    // otherwise a client that sent USER first would look "already
-    // registered" the instant we set the nick and would never get its 001.
     bool wasRegistered = client->isFullyRegistered();
     std::string oldPrefix = client->getPrefix();
 
@@ -757,9 +657,6 @@ void Server::handleNICK(int fd, IRCMessage& msg)
             sendWelcome(client);
         return;
     }
-
-    // Rename: the change is echoed to the user and to every channel they
-    // share, using the OLD prefix as the source of the message.
     std::string nickMsg = ":" + oldPrefix + " NICK :" + newNick + "\r\n";
     sendToClient(fd, nickMsg);
     for (std::map<std::string, Channel*>::iterator it = _channels.begin();
@@ -807,9 +704,6 @@ void Server::handleUSER(int fd, IRCMessage& msg)
         sendWelcome(client);
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  Connection keep-alive and teardown
-// ═════════════════════════════════════════════════════════════════════
 
 void Server::handlePING(int fd, IRCMessage& msg)
 {
@@ -822,15 +716,11 @@ void Server::handlePING(int fd, IRCMessage& msg)
             nick, "No origin specified"));
         return;
     }
-    // The token the client sent must come back untouched — that is how the
-    // client matches the reply to its own ping and measures the lag.
     sendToClient(fd, ":ircserv PONG ircserv :" + msg.params[0] + "\r\n");
 }
 
 void Server::handlePONG(int fd, IRCMessage& msg)
 {
-    // We never ping clients ourselves, so an incoming PONG is simply
-    // absorbed. Answering it with 421 would confuse real clients.
     (void)fd;
     (void)msg;
 }
@@ -855,9 +745,6 @@ void Server::handleQUIT(int fd, IRCMessage& msg)
     _queueDisconnect(fd);
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  Messaging
-// ═════════════════════════════════════════════════════════════════════
 
 void Server::handlePRIVMSG(int fd, IRCMessage& msg, bool isNotice)
 {
@@ -906,7 +793,6 @@ void Server::handlePRIVMSG(int fd, IRCMessage& msg, bool isNotice)
             }
             std::string full = ":" + client->getPrefix() + " " + cmd + " "
                              + channel->getName() + " :" + msg.params[1] + "\r\n";
-            // sender excluded: their own client already displayed the line
             channel->broadcast(full, client);
         }
         else
@@ -927,9 +813,6 @@ void Server::handlePRIVMSG(int fd, IRCMessage& msg, bool isNotice)
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  Channels
-// ═════════════════════════════════════════════════════════════════════
 
 void Server::handleJOIN(int fd, IRCMessage& msg)
 {
@@ -942,7 +825,6 @@ void Server::handleJOIN(int fd, IRCMessage& msg)
         return;
     }
 
-    // "JOIN #a,#b,#c key1,key2" — the Nth key belongs to the Nth channel.
     std::vector<std::string> names = _split(msg.params[0], ',');
     std::vector<std::string> keys;
     if (msg.params.size() > 1)
@@ -980,7 +862,7 @@ void Server::_joinChannel(int fd, const std::string& name, const std::string& ke
     }
 
     if (channel->hasClient(client))
-        return;                       // already there: JOIN is a no-op
+        return;                    
 
     if (!created)
     {
@@ -1007,11 +889,8 @@ void Server::_joinChannel(int fd, const std::string& name, const std::string& ke
         }
     }
 
-    channel->addClient(client);        // first member becomes operator
-    channel->removeInvited(client);    // an invite is single-use
-
-    // The JOIN echo goes to everybody INCLUDING the new member: that is how
-    // their own client learns the join succeeded and opens the window.
+    channel->addClient(client);       
+    channel->removeInvited(client);    
     std::string joinMsg = ":" + client->getPrefix() + " JOIN "
                         + channel->getName() + "\r\n";
     channel->broadcast(joinMsg, NULL);
@@ -1065,9 +944,6 @@ void Server::handlePART(int fd, IRCMessage& msg)
         if (!reason.empty())
             partMsg += " :" + reason;
         partMsg += "\r\n";
-
-        // Broadcast first (NULL = nobody excluded) so the leaving user also
-        // sees the confirmation, then actually remove them.
         channel->broadcast(partMsg, NULL);
         channel->removeClient(client);
         channel->removeOperator(client);
@@ -1135,8 +1011,6 @@ void Server::handleKICK(int fd, IRCMessage& msg)
                             + " :" + (msg.params.size() > 2 ? msg.params[2]
                                                             : client->getNickname())
                             + "\r\n";
-
-        // Broadcast before removing so the kicked user is told why.
         channel->broadcast(kickMsg, NULL);
         channel->removeClient(target);
         channel->removeOperator(target);
@@ -1226,8 +1100,6 @@ void Server::handleTOPIC(int fd, IRCMessage& msg)
             "You're not on that channel"));
         return;
     }
-
-    // One parameter = "show me the topic", two = "set the topic".
     if (msg.params.size() == 1)
     {
         if (channel->getTopic().empty())
@@ -1254,9 +1126,6 @@ void Server::handleTOPIC(int fd, IRCMessage& msg)
         + channel->getName() + " :" + msg.params[1] + "\r\n", NULL);
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  MODE
-// ═════════════════════════════════════════════════════════════════════
 
 void Server::handleMODE(int fd, IRCMessage& msg)
 {
@@ -1269,9 +1138,6 @@ void Server::handleMODE(int fd, IRCMessage& msg)
         return;
     }
 
-    // MODE has two completely different meanings depending on the target.
-    // Clients send "MODE <own nick>" right after connecting, so we must not
-    // answer that with "No such channel".
     if (msg.params[0][0] != '#' && msg.params[0][0] != '&')
     {
         handleUserMode(fd, msg);
@@ -1285,8 +1151,6 @@ void Server::handleMODE(int fd, IRCMessage& msg)
             client->getNickname() + " " + msg.params[0], "No such channel"));
         return;
     }
-
-    // A bare "MODE #chan" is a query: report the current modes.
     if (msg.params.size() == 1)
     {
         sendToClient(fd, IRC::makeRawReply(IRC::RPL_CHANNELMODEIS,
@@ -1313,9 +1177,6 @@ void Server::handleMODE(int fd, IRCMessage& msg)
     const std::string& modes = msg.params[1];
     char   sign     = '+';
     size_t argIndex = 2;
-
-    // We rebuild the list of changes that were actually applied, so the
-    // broadcast reflects reality instead of echoing the raw request.
     std::string appliedModes;
     std::string appliedArgs;
     char        appliedSign = 0;
@@ -1368,7 +1229,7 @@ void Server::handleMODE(int fd, IRCMessage& msg)
                 std::string raw = msg.params[argIndex++];
                 int limit = std::atoi(raw.c_str());
                 if (limit <= 0)
-                    continue;             // silently ignore a nonsense limit
+                    continue;            
                 channel->setUserLimit(limit);
                 appliedArgs += " " + raw;
             }
@@ -1421,28 +1282,18 @@ void Server::handleUserMode(int fd, IRCMessage& msg)
 {
     Client* client = _clients[fd];
 
-    // A user may only look at their own modes.
     if (IRC::toLower(msg.params[0]) != IRC::toLower(client->getNickname()))
     {
         sendToClient(fd, IRC::makeReply(IRC::ERR_USERSDONTMATCH,
             client->getNickname(), "Cannot change mode for other users"));
         return;
     }
-    // We implement no user modes, so any change request is answered with the
-    // (unchanged) current state rather than an error.
     sendToClient(fd, IRC::makeRawReply(IRC::RPL_UMODEIS,
         client->getNickname() + " +i"));
 }
 
-// ═════════════════════════════════════════════════════════════════════
-//  Commands that IRC clients send by themselves
-// ═════════════════════════════════════════════════════════════════════
-
 void Server::handleCAP(int fd, IRCMessage& msg)
 {
-    // IRCv3 capability negotiation. We support no capabilities, but the
-    // handshake must still be answered: a client that sends CAP LS waits for
-    // a reply before sending NICK/USER, and a 421 here stalls the connection.
     if (msg.params.empty())
         return;
 
@@ -1452,7 +1303,6 @@ void Server::handleCAP(int fd, IRCMessage& msg)
     else if (sub == "REQ")
         sendToClient(fd, ":ircserv CAP * NAK :"
             + (msg.params.size() > 1 ? msg.params[1] : "") + "\r\n");
-    // CAP END needs no answer: registration simply continues.
 }
 
 void Server::handleWHO(int fd, IRCMessage& msg)
@@ -1460,8 +1310,6 @@ void Server::handleWHO(int fd, IRCMessage& msg)
     Client* client = _clients[fd];
     std::string mask = msg.params.empty() ? "*" : msg.params[0];
 
-    // "H" = here (as opposed to G, gone/away). "0" is the hop count: we have
-    // no server links, so every user is zero hops away.
     if (!mask.empty() && (mask[0] == '#' || mask[0] == '&'))
     {
         Channel* channel = _findChannel(mask);
