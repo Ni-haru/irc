@@ -1,8 +1,12 @@
 #include "Client.hpp"
 
 Client::Client(int fd)
-    : _fd(fd), _passAccepted(false), _nickSet(false), _userSet(false)
+    : _fd(fd), _hostname("127.0.0.1"),
+      _passAccepted(false), _nickSet(false), _userSet(false)
 {
+    // _hostname is overwritten by Server::_acceptClient() with the real peer
+    // address; the default is only a safety net so that getPrefix() can never
+    // produce "nick!user@" with an empty host, which some clients reject.
 }
 
 Client::~Client()
