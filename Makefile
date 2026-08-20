@@ -10,9 +10,6 @@ SRCS    = $(SRC_DIR)/main.cpp \
 
 OBJS    = $(SRCS:.cpp=.o)
 
-# Every header the sources include. Listing them as prerequisites of the .o
-# rule is what makes "touch a header -> only the affected .o is rebuilt"
-# work, while still avoiding a full relink when nothing changed.
 HEADERS = $(SRC_DIR)/Server.hpp \
           $(SRC_DIR)/Client.hpp \
           $(SRC_DIR)/Channel.hpp \
