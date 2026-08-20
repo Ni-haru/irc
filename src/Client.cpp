@@ -17,12 +17,14 @@ void    Client::appendToBuffer(const std::string& data){
 
 bool    Client::getNextMessage(std::string& msg)
 {
-    std::size_t pos = this->_readBuffer.find("\r\n");
+    std::size_t pos = this->_readBuffer.find("\n");
     if(pos == std::string::npos){
         return false;
     }
     msg = this->_readBuffer.substr(0, pos);
-    this->_readBuffer.erase(0, pos + 2);
+    if (!msg.empty() && msg[msg.size() - 1] == '\r')
+        msg.erase(msg.size() - 1);
+    this->_readBuffer.erase(0, pos + 1);
     return true;
 }
 

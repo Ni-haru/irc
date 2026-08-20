@@ -73,7 +73,7 @@ void Server::run()
 
             if (_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL))
             {
-                _disconnectClient(fd);
+                clientDisconnected(fd, "Connection closed");
                 i--;
                 continue;
             }
@@ -84,7 +84,14 @@ void Server::run()
                 continue;
             }}
             if (_fds[i].revents & POLLOUT)
+            {
                 _flushWriteBuffer(fd);
+                if (!_clients.count(fd))
+                {
+                    i--;
+                    continue;
+                }
+            }
         }
     }
 }
@@ -119,15 +126,19 @@ void Server::_readFromClient(int fd)
 
     if (bytes <= 0)
     {
-        _disconnectClient(fd);
+        clientDisconnected(fd, "Connection reset by peer");
         return;
     }
 
     buf[bytes] = '\0';
     _clients[fd]->appendToBuffer(std::string(buf, bytes));
     std::string msg;
-    while (_clients[fd]->getNextMessage(msg))
+    while (_clients.count(fd) && _clients[fd]->getNextMessage(msg))
+    {
         _handleMessage(fd, msg);
+        if (!_clients.count(fd))
+            return;
+    }
 }
 
 void Server::_flushWriteBuffer(int fd)
@@ -357,6 +368,41 @@ void Server::sendToClient(int fd, const std::string& msg)
     }
 }
 
+void Server::clientDisconnected(int fd, const std::string& reason)
+{
+    if (!this->_clients.count(fd))
+        return;
+
+    Client* client = this->_clients[fd];
+
+    if (client->isFullyRegistered())
+    {
+        std::string quitMsg = IRC::makeMsg(client->getPrefix(), "QUIT", ":" + reason);
+
+        std::vector<std::string> toDelete;
+        std::map<std::string, Channel*>::iterator it;
+        for (it = this->_channels.begin(); it != this->_channels.end(); it++)
+        {
+            Channel* chan = it->second;
+            if (chan->hasClient(client))
+            {
+                chan->broadcast(quitMsg, NULL);
+                chan->removeClient(client);
+                if (chan->empty())
+                    toDelete.push_back(it->first);
+            }
+        }
+        for (size_t i = 0; i < toDelete.size(); i++)
+        {
+            delete this->_channels[toDelete[i]];
+            this->_channels.erase(toDelete[i]);
+        }
+    }
+
+    sendToClient(fd, "ERROR :Closing connection\r\n");
+    this->_disconnectClient(fd);
+}
+
 // temporary stubs — Person 2 and 3 replace these
 void Server::handlePASS(int fd, IRCMessage& msg)
 {
@@ -379,7 +425,7 @@ void Server::handlePASS(int fd, IRCMessage& msg)
     {
         std::string nick = "*";
         sendToClient(fd, IRC::makeReply(IRC::ERR_PASSWDMISMATCH, nick, "Password incorrect"));
-        this->_disconnectClient(fd);
+        this->clientDisconnected(fd, "Bad password");
         return;
     }
     else
@@ -459,11 +505,25 @@ void Server::handleNICK(int fd, IRCMessage& msg)
             }
             else
             {
-                std::string oldNick = client->getNickname();
+                std::string oldPrefix = client->getPrefix();
                 std::string newNick = msg.params[0];
                 client->setNickname(msg.params[0]);
                 client->setNickSet(true);
-                // TODO: broadcast only to shared channels
+                std::string nickMsg = IRC::makeMsg(oldPrefix, "NICK", ":" + newNick);
+                bool sentToSelf = false;
+                std::vector<std::string> alreadySent;
+                std::map<std::string, Channel*>::iterator it;
+                for (it = this->_channels.begin(); it != this->_channels.end(); it++)
+                {
+                    Channel* chan = it->second;
+                    if (chan->hasClient(client))
+                    {
+                        chan->broadcast(nickMsg, NULL);
+                        sentToSelf = true;
+                    }
+                }
+                if (!sentToSelf)
+                    sendToClient(fd, nickMsg);
             }
             
         }
@@ -503,20 +563,12 @@ void Server::handleUSER(int fd, IRCMessage& msg)    {
             this->sendWelcome(client);
     }
 }
-void Server::handleQUIT(int fd, IRCMessage& msg)    {
-    Client* client = this->_clients[fd];
-    if(client->isFullyRegistered())
-    {
-        std::string raison = "Quit:";
-        if(!msg.params.empty() && !msg.params[0].empty())
-            raison += " " + msg.params[0];
-        std::string broadcast = IRC::makeMsg(client->getPrefix(), msg.command, raison);
-        // TODO: broadcast only to shared channels
-        // TODO : retirer de channels
-        // TODO : personne 1 add quit crash
-    }
-    sendToClient(fd, "ERROR :Closing connection\r\n");
-    this->_disconnectClient(fd);
+void Server::handleQUIT(int fd, IRCMessage& msg)
+{
+    std::string raison = "Quit:";
+    if (!msg.params.empty() && !msg.params[0].empty())
+        raison += " " + msg.params[0];
+    clientDisconnected(fd, raison);
 }
 void Server::handlePART(int fd, IRCMessage& msg)    {
     Client* client = this->_clients[fd];
@@ -551,10 +603,23 @@ void Server::handlePART(int fd, IRCMessage& msg)    {
             }
             else
             {
-                // TODO : search client in channel
-                // TODO : sent broadcast
-                // TODO : remove client from channel
-                // TODO : remove channel if vide
+                Channel* chan = this->_channels[channel];
+                if (!chan->hasClient(client))
+                {
+                    std::string nick = client->getNickname();
+                    if (nick.empty()) nick = "*";
+                    sendToClient(fd, IRC::makeReply(IRC::ERR_NOTONCHANNEL, nick + " " + channel, "You're not on that channel"));
+                    continue;
+                }
+                std::string raison = msg.params.size() > 1 ? msg.params[1] : client->getNickname();
+                std::string partMsg = IRC::makeMsg(client->getPrefix(), "PART", channel + " :" + raison);
+                chan->broadcast(partMsg, NULL);
+                chan->removeClient(client);
+                if (chan->empty())
+                {
+                    delete this->_channels[channel];
+                    this->_channels.erase(channel);
+                }
             }
         }
         
@@ -594,14 +659,45 @@ void Server::handlePRIVMSG(int fd, IRCMessage& msg) {
         {
             if(target[0] == '#' || target[0] == '&')
             {
-                // TODO : search channel
-                // TODO : search client in channel
-                // TODO : sent broadcast
+                if (this->_channels.find(target) == this->_channels.end())
+                {
+                    std::string nick = client->getNickname();
+                    if (nick.empty()) nick = "*";
+                    sendToClient(fd, IRC::makeReply(IRC::ERR_NOSUCHCHANNEL, nick + " " + target, "No such channel"));
+                    continue;
+                }
+                Channel* chan = this->_channels[target];
+                if (!chan->hasClient(client))
+                {
+                    std::string nick = client->getNickname();
+                    if (nick.empty()) nick = "*";
+                    sendToClient(fd, IRC::makeReply(IRC::ERR_CANNOTSENDTOCHAN, nick + " " + target, "Cannot send to channel"));
+                    continue;
+                }
+                std::string out = IRC::makeMsg(client->getPrefix(), "PRIVMSG", target + " :" + msg.params[1]);
+                chan->broadcast(out, client);
             }
             else
             {
-                // TODO : search client
-                // TODO : sent the msg
+                Client* dest = NULL;
+                std::map<int, Client*>::iterator it;
+                for (it = this->_clients.begin(); it != this->_clients.end(); it++)
+                {
+                    if (it->second->getNickname() == target)
+                    {
+                        dest = it->second;
+                        break;
+                    }
+                }
+                if (dest == NULL)
+                {
+                    std::string nick = client->getNickname();
+                    if (nick.empty()) nick = "*";
+                    sendToClient(fd, IRC::makeReply(IRC::ERR_NOSUCHNICK, nick + " " + target, "No such nick/channel"));
+                    continue;
+                }
+                std::string out = IRC::makeMsg(client->getPrefix(), "PRIVMSG", target + " :" + msg.params[1]);
+                sendToClient(dest->getFd(), out);
             }
         }
     }

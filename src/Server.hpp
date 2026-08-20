@@ -28,6 +28,7 @@ public:
     ~Server();
 
     void run();
+    void clientDisconnected(int fd, const std::string& reason);
 
     // signal handler sets this to true to stop the loop cleanly
     static bool _stop;

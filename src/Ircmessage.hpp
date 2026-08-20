@@ -44,6 +44,7 @@ namespace IRC
     const int ERR_NONICKNAMEGIVEN  = 431;
     const int ERR_ERRONEUSNICK     = 432;
     const int ERR_NICKNAMEINUSE    = 433;
+    const int ERR_USERNOTINCHANNEL = 441;
     const int ERR_NOTONCHANNEL     = 442;
     const int ERR_USERONCHANNEL    = 443;
     const int ERR_NOTREGISTERED    = 451;
