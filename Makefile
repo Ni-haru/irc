@@ -6,6 +6,7 @@ SRC_DIR = src
 SRCS    = $(SRC_DIR)/main.cpp \
           $(SRC_DIR)/Server.cpp \
           $(SRC_DIR)/Client.cpp \
+          $(SRC_DIR)/command_handlers.cpp \
           $(SRC_DIR)/Channel.cpp
 
 OBJS    = $(SRCS:.cpp=.o)

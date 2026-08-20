@@ -17,7 +17,8 @@
 #include <csignal>
 #include <cstring>
 #include <iostream>
-
+#include <cstdlib>
+#include <sstream>
 #include "Client.hpp"
 #include "Channel.hpp"
 #include "Ircmessage.hpp"
@@ -69,6 +70,7 @@ private:
     static bool _isValidChannelName(const std::string& name);
     static std::vector<std::string> _split(const std::string& s, char sep);
 
+    // command_handlers.cpp
     void sendWelcome(Client* client);
     void handlePASS(int fd, IRCMessage& msg);
     void handleNICK(int fd, IRCMessage& msg);
@@ -84,7 +86,7 @@ private:
     void handleINVITE(int fd, IRCMessage& msg);
     void handleTOPIC(int fd, IRCMessage& msg);
     void handleMODE(int fd, IRCMessage& msg);
-    
+
     void handleCAP(int fd, IRCMessage& msg);
     void handleWHO(int fd, IRCMessage& msg);
     void handleWHOIS(int fd, IRCMessage& msg);
